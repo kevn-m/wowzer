@@ -12,12 +12,41 @@ class ScreenCaptureAgent:
     self.fps = None
     self.enable_cv_preview = True
 
+    self.target_images = {}  # Dictionary to store target images
+
     # Get the screen resolution
     self.w, self.h = pyautogui.size()
     print("Screen Resolution: " + "w: " + str(self.w) + " h:" + str(self.h))
 
     # Define the monitor region to capture
     self.monitor = {"top": 0, "left": 0, "width": self.w, "height": self.h}
+
+  def load_targets(self, name, path):
+    target_image = cv.imread(path, cv.IMREAD_COLOR)
+    if target_image is None:
+      print(f'Failed to load target image: {path}')
+      return
+    self.target_images[name] = target_image
+    print(f"Loaded target image '{name} from '{path}'")
+
+  def detect_image(self, image_name, threshold=0.8):
+    if image_name not in self.target_images:
+      print(f"Image '{image_name}' not loaded.")
+      return None
+
+    target_image = self.target_images[image_name]
+    img_gray = cv.cvtColor(self.img, cv.COLOR_BGR2GRAY)
+    target_image_gray = cv.cvtColor(target_image, cv.COLOR_BGR2GRAY)
+
+    result = cv.matchTemplate(img_gray, target_image_gray, cv.TM_CCOEFF_NORMED)
+    min_val, max_val, min_loc, max_loc = cv.minMaxLoc(result)
+
+    if max_val >= threshold:
+      top_left = max_loc
+      bottom_right = (top_left[0] + target_image.shape[1], top_left[1] + target_image.shape[0])
+      return (top_left, bottom_right)
+    else:
+      return None
 
   def capture_screen(self):
     fps_report_time = time.time()
@@ -30,6 +59,15 @@ class ScreenCaptureAgent:
         # Capture the screen image
         self.img = sct.grab(self.monitor)
         self.img = np.array(self.img)
+
+        for target_image_name in self.target_images:
+          match = self.detect_image(target_image_name)
+          if match:
+            top_left, bottom_right = match
+            cv.rectangle(self.img, top_left, bottom_right, (0, 255, 0), 2)
+            cv.putText(self.img, target_image_name, (top_left[0], top_left[1] - 10),
+                                   cv.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+
 
         if self.enable_cv_preview:
           # Resize the captured image
@@ -81,6 +119,7 @@ def print_menu():
 
 if __name__ == "__main__":
   screen_agent = ScreenCaptureAgent()
+  screen_agent.load_targets("plank make spell", "target_images/cast_plank_make_spell_icon.png")
 
   while True:
     print_menu()
