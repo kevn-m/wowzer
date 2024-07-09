@@ -3,14 +3,19 @@ import numpy as np
 import cv2 as cv
 import time
 import pyautogui
-import multiprocessing
+from multiprocessing import Process, Manager
+import random
+import pdb
+
+from human_mouse import human_mouse_move
 
 class ScreenCaptureAgent:
-  def __init__(self) -> None:
+  def __init__(self, shared_data) -> None:
     self.img = None
     self.capture_process = None
     self.fps = None
     self.enable_cv_preview = True
+    self.shared_data = shared_data
 
     self.target_images = {}  # Dictionary to store target images
 
@@ -29,7 +34,7 @@ class ScreenCaptureAgent:
     self.target_images[name] = target_image
     print(f"Loaded target image '{name} from '{path}'")
 
-  def detect_image(self, image_name, threshold=0.8):
+  def detect_image(self, image_name, threshold=0.5):
     if image_name not in self.target_images:
       print(f"Image '{image_name}' not loaded.")
       return None
@@ -44,9 +49,36 @@ class ScreenCaptureAgent:
     if max_val >= threshold:
       top_left = max_loc
       bottom_right = (top_left[0] + target_image.shape[1], top_left[1] + target_image.shape[0])
+      self.shared_data['matched'] = (top_left, bottom_right)
       return (top_left, bottom_right)
     else:
       return None
+
+  def move_mouse_to(self):
+    matched = self.shared_data.get('matched', None)
+    if matched is None:
+      print(f"No image to move mouse to...")
+    else:
+      # Calculate the range for x and y coordinates within the bounding box
+      x_range = (matched[0][0], matched[1][0])
+      y_range = (matched[0][1], matched[1][1])
+
+      # Shrink the range by a factor to move the clicks closer to the center
+      shrink_factor = 0.3  # Adjust this factor to control how close to the center the clicks are
+      x_shrink = int((x_range[1] - x_range[0]) * shrink_factor)
+      y_shrink = int((y_range[1] - y_range[0]) * shrink_factor)
+
+      # Adjusted range to avoid edges
+      adjusted_x_range = (x_range[0] + x_shrink, x_range[1] - x_shrink)
+      adjusted_y_range = (y_range[0] + y_shrink, y_range[1] - y_shrink)
+
+      # Generate a random x and y coordinate within the adjusted bounding box
+      random_x = random.randint(adjusted_x_range[0], adjusted_x_range[1])
+      random_y = random.randint(adjusted_y_range[0], adjusted_y_range[1])
+
+      print(f"Moving to {random_x}, {random_y}")
+      pyautogui.moveTo(random_x, random_y)
+      pyautogui.rightClick()
 
   def capture_screen(self):
     fps_report_time = time.time()
@@ -67,7 +99,6 @@ class ScreenCaptureAgent:
             cv.rectangle(self.img, top_left, bottom_right, (0, 255, 0), 2)
             cv.putText(self.img, target_image_name, (top_left[0], top_left[1] - 10),
                                    cv.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-
 
         if self.enable_cv_preview:
           # Resize the captured image
@@ -94,7 +125,7 @@ class ScreenCaptureAgent:
         elapsed_time = time.time() - fps_report_time
         if elapsed_time >= fps_report_delay:
           self.fps = n_frames / elapsed_time
-          print("FPS: " + str(self.fps))
+          # print("FPS: " + str(self.fps))
           n_frames = 0
           fps_report_time = time.time()
         n_frames += 1
@@ -115,42 +146,49 @@ def print_menu():
   print(f'{bcolors.CYAN}Command Menu{bcolors.ENDC}')
   print(f'{bcolors.GREEN}\t r - run\t Start screen capture{bcolors.ENDC}')
   print(f'{bcolors.RED}\t s - stop\t Stop screen capture{bcolors.ENDC}')
+  print(f'{bcolors.BLUE}\t m - move\t Move mouse{bcolors.ENDC}')
   print(f'\t q - quit\t Quit program')
 
 if __name__ == "__main__":
-  screen_agent = ScreenCaptureAgent()
-  screen_agent.load_targets("plank make spell", "target_images/cast_plank_make_spell_icon.png")
+  with Manager() as manager:
+    shared_data = manager.dict()
 
-  while True:
-    print_menu()
-    user_input = input().strip().lower()
+    screen_agent = ScreenCaptureAgent(shared_data)
+    screen_agent.load_targets("hat", "target_images/hat.png")
 
-    if user_input == 'quit' or user_input == 'q':
-      if screen_agent.capture_process is not None:
-        print(f'{bcolors.PINK}Closed screen capture and terminated program{bcolors.ENDC}')
+    while True:
+      print_menu()
+      user_input = input().strip().lower()
+
+      if user_input == 'quit' or user_input == 'q':
+        if screen_agent.capture_process is not None:
+          print(f'{bcolors.PINK}Closed screen capture and terminated program{bcolors.ENDC}')
+          screen_agent.capture_process.terminate()
+        break
+
+      elif user_input == 'run' or user_input == 'r':
+        if screen_agent.capture_process is not None:
+          print(f'{bcolors.YELLOW}Warning:{bcolors.ENDC} Capture process already running')
+          continue
+        screen_agent.capture_process = Process(
+          target=screen_agent.capture_screen,
+          args=(),
+          name="screen capture process"
+        )
+        screen_agent.capture_process.start()
+        print(f'{bcolors.GREEN}Screen capture started{bcolors.ENDC}')
+
+      elif user_input == 'stop' or user_input == 's':
+        if screen_agent.capture_process is None:
+          print(f'{bcolors.YELLOW}Warning:{bcolors.ENDC} Capture is not running')
+          continue
         screen_agent.capture_process.terminate()
-      break
+        screen_agent.capture_process = None
 
-    elif user_input == 'run' or user_input == 'r':
-      if screen_agent.capture_process is not None:
-        print(f'{bcolors.YELLOW}Warning:{bcolors.ENDC} Capture process already running')
-        continue
-      screen_agent.capture_process = multiprocessing.Process(
-        target=screen_agent.capture_screen,
-        args=(),
-        name="screen capture process"
-      )
-      screen_agent.capture_process.start()
-      print(f'{bcolors.GREEN}Screen capture started{bcolors.ENDC}')
+      elif user_input == 'move' or user_input == 'm':
+        screen_agent.move_mouse_to()
 
-    elif user_input == 'stop' or user_input == 's':
-      if screen_agent.capture_process is None:
-        print(f'{bcolors.YELLOW}Warning:{bcolors.ENDC} Capture is not running')
-        continue
-      screen_agent.capture_process.terminate()
-      screen_agent.capture_process = None
+      else:
+        print(f'{bcolors.RED}ERROR:{bcolors.ENDC} Invalid selection')
 
-    else:
-      print(f'{bcolors.RED}ERROR:{bcolors.ENDC} Invalid selection')
-
-  print(f'{bcolors.RED}Exited{bcolors.ENDC}')
+    print(f'{bcolors.RED}Exited{bcolors.ENDC}')
